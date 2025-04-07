@@ -639,8 +639,8 @@ def parse_track_data_file(data_path, xml_db, track_name, cfg_file=None):
                     long = parts[long_idx].replace("+", "")
 
                     # Convert to float
-                    lat = float(lat)
-                    long = float(long)
+                    lat = float(lat.replace(",", "."))
+                    long = float(long.replace(",", "."))
 
                     # Convert RaceLogic minutes to decimal degrees
                     lat_degrees = convert_to_decimal_degrees(lat)
@@ -668,16 +668,13 @@ def parse_track_data_file(data_path, xml_db, track_name, cfg_file=None):
                     velocity = heading = height = 0
 
                     if "velocity" in column_indices and column_indices["velocity"] < len(parts):
-                        velocity_idx = column_indices["velocity"]
-                        velocity = float(parts[velocity_idx])
+                        velocity = float(parts[column_indices["velocity"]].replace(",", "."))
 
                     if "heading" in column_indices and column_indices["heading"] < len(parts):
-                        heading_idx = column_indices["heading"]
-                        heading = float(parts[heading_idx])
+                        heading = float(parts[column_indices["heading"]].replace(",", "."))
 
                     if "height" in column_indices and column_indices["height"] < len(parts):
-                        height_idx = column_indices["height"]
-                        height = float(parts[height_idx].replace("+", ""))
+                        height = float(parts[column_indices["height"]].replace(",", ".").replace("+", ""))
 
                     parsed_data.append(
                         {

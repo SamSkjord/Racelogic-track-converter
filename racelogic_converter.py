@@ -560,7 +560,7 @@ def create_kmz(kml_content, output_path):
 def process_track(track_params):
     """Process a single track file and convert to KMZ"""
     cir_path, output_dir, root_dir, xml_db = track_params
-
+    
     try:
         # Get track name from .CIR file
         track_name = os.path.basename(cir_path).replace(".CIR", "").replace(".cir", "")
@@ -568,7 +568,7 @@ def process_track(track_params):
 
         # Create output file path
         country_dir = os.path.basename(os.path.dirname(cir_path))
-        output_path = os.path.join(output_dir, country_dir, track_name + ".kmz")
+        output_path = os.path.join(output_dir, country_dir, strip(track_name) + ".kmz")
 
         # Ensure output directory exists
         os.makedirs(os.path.dirname(output_path), exist_ok=True)

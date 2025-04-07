@@ -28,3 +28,12 @@ It scans the full RaceLogic directory structure, handles different file types an
 
    ```bash
    python racelogic_converter.py C:\ProgramData\Racelogic path\to\output_directory
+
+---
+
+## 📝 TODO:
+
+- Start/Finish line orientation is off
+- Optimisations
+
+---

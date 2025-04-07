@@ -526,13 +526,12 @@ def generate_kml(parsed_data, track_info):
         </Point>
         </Placemark>"""
 
-        kml += """
-        </Document>
-        </kml>"""
-
-        return kml
+    kml += """
+    </Document>
+    </kml>"""
 
     return kml
+
 
 
 def create_kmz(kml_content, output_path):

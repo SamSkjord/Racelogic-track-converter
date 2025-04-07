@@ -8,6 +8,13 @@ Usage:
     python racelogic_converter.py C:\\ProgramData\\Racelogic output_directory
 """
 
+# List of .cir files to skip
+SKIP_TRACKS = {
+    "Falkenberg.CIR", #broken version in the china directory
+    "test track.CIR", #Autobahn Country Club without the start\finish line
+}
+
+
 import sys
 import os
 import zipfile
@@ -746,7 +753,11 @@ def process_all_tracks(input_dir, output_dir, num_processes=None):
     log_message(f"Found {len(cir_files)} CIR files to process")
 
     # Prepare parameters for processing
-    track_params = [(cir_file, output_dir, input_dir, xml_db) for cir_file in cir_files]
+    track_params = [
+                        (cir_file, output_dir, input_dir, xml_db)
+                        for cir_file in cir_files
+                        if os.path.basename(cir_file) not in SKIP_TRACKS
+                    ]
 
     # Track progress
     total_tracks = len(track_params)

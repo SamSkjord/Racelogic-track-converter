@@ -457,50 +457,37 @@ def generate_kml(parsed_data, track_info):
     track_name = track_info.get("name", "Unknown Track")
     log_message(f"Generating KML for track: {track_name} with {len(parsed_data)} points")
 
-    # Check if we have start/finish line coordinates in the track info
-    start_finish_coords = []
-    for split in track_info.get("splitinfo", []):
-        if split.get("name") == "Start / Finish" or split.get("name") == "Start/Finish":
-            if "lat" in split and "long" in split:
-                sf_lat = convert_to_decimal_degrees(
-                    float(split["lat"].replace("+", ""))
-                )
-                
-                # Determine hemisphere based on the sign in the database
-                west_hemisphere = split["long"].startswith("-")
-                sf_long = -convert_to_decimal_degrees(
-                    float(split["long"].replace("-", "").replace("+", ""))
-                ) if west_hemisphere else convert_to_decimal_degrees(
-                    float(split["long"].replace("+", ""))
-                )
-                
-                start_finish_coords.append((sf_long, sf_lat))
-                log_message(f"Added start/finish coordinate: ({sf_lat}, {sf_long})")
+    start_coord = None
+    finish_coord = None
 
-    # Create the KML output
+    for split in track_info.get("splitinfo", []):
+        name = split.get("name", "").strip()
+        if "lat" not in split or "long" not in split:
+            continue
+
+        lat = convert_to_decimal_degrees(float(split["lat"].replace("+", "")))
+        long_raw = float(split["long"].replace("+", "").replace("-", ""))
+        long = -convert_to_decimal_degrees(long_raw) if split["long"].startswith("-") else convert_to_decimal_degrees(long_raw)
+
+        if name in ("Start / Finish", "Start/Finish"):
+            start_coord = (long, lat)
+        elif name == "Finish":
+            finish_coord = (long, lat)
+
+    # Start KML document
     kml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
   <Document>
     <name>{track_name} Track Map</name>
     <description>Converted from RaceLogic data</description>
-    
-    <!-- Track path style -->
+
     <Style id="trackStyle">
-      <LineStyle>
-        <color>ff0000ff</color>
-        <width>4</width>
-      </LineStyle>
+      <LineStyle><color>ff0000ff</color><width>4</width></LineStyle>
     </Style>
-    
-    <!-- Start/Finish line style -->
     <Style id="startFinishStyle">
-      <LineStyle>
-        <color>ff00ff00</color>
-        <width>6</width>
-      </LineStyle>
+      <LineStyle><color>ff00ff00</color><width>6</width></LineStyle>
     </Style>
-    
-    <!-- Track Path Placemark -->
+
     <Placemark>
       <name>Track Path</name>
       <styleUrl>#trackStyle</styleUrl>
@@ -508,37 +495,39 @@ def generate_kml(parsed_data, track_info):
         <tessellate>1</tessellate>
         <coordinates>"""
 
-    # Add each coordinate point
     for point in parsed_data:
-        kml += (
-            f"\n          {point['long']:.8f},{point['lat']:.8f},{point['height']:.1f}"
-        )
+        kml += f"\n          {point['long']:.8f},{point['lat']:.8f},{point['height']:.1f}"
 
     kml += """
         </coordinates>
       </LineString>
-    </Placemark>
-    """
+    </Placemark>"""
 
-    # Add Start/Finish line if we have the coordinates
-    if len(start_finish_coords) == 1:
-        sf_long, sf_lat = start_finish_coords[0]
+    if start_coord:
         kml += f"""
-        <!-- Start/Finish Marker Placemark -->
-        <Placemark>
-        <name>Start / Finish</name>
-        <styleUrl>#startFinishStyle</styleUrl>
-        <Point>
-            <coordinates>{sf_long:.8f},{sf_lat:.8f},0</coordinates>
-        </Point>
-        </Placemark>"""
+    <Placemark>
+      <name>{'Start' if finish_coord else 'Start / Finish'}</name>
+      <styleUrl>#startFinishStyle</styleUrl>
+      <Point>
+        <coordinates>{start_coord[0]:.8f},{start_coord[1]:.8f},0</coordinates>
+      </Point>
+    </Placemark>"""
+
+    if finish_coord:
+        kml += f"""
+    <Placemark>
+      <name>Finish</name>
+      <styleUrl>#startFinishStyle</styleUrl>
+      <Point>
+        <coordinates>{finish_coord[0]:.8f},{finish_coord[1]:.8f},0</coordinates>
+      </Point>
+    </Placemark>"""
 
     kml += """
-    </Document>
-    </kml>"""
+  </Document>
+</kml>"""
 
     return kml
-
 
 
 def create_kmz(kml_content, output_path):

@@ -515,47 +515,22 @@ def generate_kml(parsed_data, track_info):
 
     # Add Start/Finish line if we have the coordinates
     if len(start_finish_coords) == 1:
-        # If we only have one point, create a short line perpendicular to the track
         sf_long, sf_lat = start_finish_coords[0]
-        # Find track direction at start/finish
-        direction = 90  # Default perpendicular direction
-        if len(parsed_data) > 10:
-            for point in parsed_data:
-                # Find point close to start/finish
-                if (
-                    abs(point["lat"] - sf_lat) < 0.0001
-                    and abs(point["long"] - sf_long) < 0.0001
-                ):
-                    direction = (
-                        point["heading"] + 90
-                    ) % 360  # Perpendicular to heading
-                    break
-
-        # Create a short line (25 meters) perpendicular to track direction
-        angle_rad = math.radians(direction)
-        # 25 meters at this latitude is approximately 0.0003 degrees
-        offset = 0.0003
-        sf_long2 = sf_long + offset * math.cos(angle_rad)
-        sf_lat2 = sf_lat + offset * math.sin(angle_rad)
-
-        log_message(f"Added start/finish line from ({sf_lat},{sf_long}) to ({sf_lat2},{sf_long2})")
-
         kml += f"""
-    <!-- Start/Finish Line Placemark -->
-    <Placemark>
-      <name>Start/Finish Line</name>
-      <styleUrl>#startFinishStyle</styleUrl>
-      <LineString>
-        <coordinates>
-          {sf_long:.8f},{sf_lat:.8f},0
-          {sf_long2:.8f},{sf_lat2:.8f},0
-        </coordinates>
-      </LineString>
-    </Placemark>"""
+        <!-- Start/Finish Marker Placemark -->
+        <Placemark>
+        <name>Start / Finish</name>
+        <styleUrl>#startFinishStyle</styleUrl>
+        <Point>
+            <coordinates>{sf_long:.8f},{sf_lat:.8f},0</coordinates>
+        </Point>
+        </Placemark>"""
 
-    kml += """
-  </Document>
-</kml>"""
+        kml += """
+        </Document>
+        </kml>"""
+
+        return kml
 
     return kml
 

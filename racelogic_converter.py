@@ -568,7 +568,7 @@ def process_track(track_params):
 
         # Create output file path
         country_dir = os.path.basename(os.path.dirname(cir_path))
-        output_path = os.path.join(output_dir, country_dir, strip(track_name) + ".kmz")
+        output_path = os.path.join(output_dir, country_dir, track_name.strip() + ".kmz")
 
         # Ensure output directory exists
         os.makedirs(os.path.dirname(output_path), exist_ok=True)

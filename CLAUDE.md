@@ -2,7 +2,9 @@
 
 ## Project Overview
 
-Converts RaceLogic `.CIR` track boundary files into Google Earth `.KML/.KMZ` files with clean centerlines suitable for lap timing and delta calculation.
+Converts RaceLogic `.CIR` track boundary files into:
+1. **Google Earth `.KML/.KMZ` files** - with boundaries and S/F markers
+2. **Track map PNG images** - transparent background, aqua track fill, S/F line
 
 ## Problem Solved
 
@@ -98,6 +100,38 @@ parsed_data = parse_track_data_file('path/to/Croft.cir', xml_db, 'Croft', None)
 kml = generate_kml(parsed_data, track_info)
 "
 ```
+
+## Track Filtering
+
+### Combo Tracks (Skipped)
+Tracks with multiple layouts overlaid are skipped. Detected via:
+- `combo="true"` attribute in database
+- `length="0"` in database
+- "Combo" in filename
+
+Use individual layout files instead (e.g., "Oulton Park International" not "Oulton Park Combo").
+
+## Track Map PNG Generation (`generate_trackmap.py`)
+
+Generates transparent PNG images of track outlines.
+
+### Approach
+- Draw thick centerline first (30px) - fills gaps between boundaries
+- Draw thinner boundary lines on top (8px) - provides definition
+- Centerline calculated by finding closest inner point for each outer point
+
+### Usage
+```python
+from generate_trackmap import generate_track_image
+generate_track_image("Croft", "/path/to/Racelogic-tracks", "output.png")
+```
+
+### Output
+- 800x800 transparent PNG
+- Aqua fill (RGBA: 0, 255, 255, 180)
+- White S/F line
+- Handles over-under sections (e.g., Oran Park)
+- Single boundary tracks (hillclimbs) drawn as simple line
 
 ## Debug
 

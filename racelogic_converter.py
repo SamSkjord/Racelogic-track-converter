@@ -15,6 +15,31 @@ SKIP_TRACKS = {
 }
 
 
+def is_combo_track(track_name, xml_db):
+    """Check if a track is a combo track (multiple layouts overlaid)"""
+    # Always check filename for "combo" - some aren't properly flagged in DB
+    if "combo" in track_name.lower():
+        return True
+
+    if xml_db is None:
+        return False
+
+    try:
+        for country in xml_db.findall(".//country"):
+            for circuit in country.findall(".//circuit"):
+                if circuit.get("name", "").strip().lower() == track_name.strip().lower():
+                    # Check for combo="true" attribute or length="0"
+                    if circuit.get("combo", "").lower() == "true":
+                        return True
+                    if circuit.get("length", "1") == "0":
+                        return True
+                    return False
+    except Exception as e:
+        log_message(f"Error checking combo status for {track_name}: {e}")
+
+    return False
+
+
 import sys
 import os
 import zipfile
@@ -1202,6 +1227,11 @@ def process_track(track_params):
         # Get track name from .CIR file
         track_name = os.path.basename(cir_path).replace(".CIR", "").replace(".cir", "")
         log_message(f"Processing track: {track_name} from {cir_path}")
+
+        # Skip combo tracks (multiple layouts overlaid)
+        if is_combo_track(track_name, xml_db):
+            log_message(f"Skipping {track_name} (combo track)")
+            return True  # Return True so it doesn't count as failure
 
         # Create output file path
         country_dir = os.path.basename(os.path.dirname(cir_path))

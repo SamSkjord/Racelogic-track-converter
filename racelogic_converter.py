@@ -325,7 +325,8 @@ def parse_track_data_file(data_path, xml_db, track_name, cfg_file=None):
             # If hemisphere wasn't determined from CFG file, analyze sample data
             if is_eastern is None:
                 # Check first few data rows to determine if we need to negate longitudes
-                data_samples = []
+                lat_samples = []
+                long_samples = []
                 for i in range(data_start_index, min(data_start_index + 10, len(lines))):
                     line = lines[i].strip()
                     if not line:
@@ -337,28 +338,30 @@ def parse_track_data_file(data_path, xml_db, track_name, cfg_file=None):
 
                     lat_idx = column_indices.get("lat", 0)
                     long_idx = column_indices.get("long", 1)
-                    
+
                     if lat_idx >= len(parts) or long_idx >= len(parts):
                         continue
 
-                    data_samples.append(parts[long_idx])
+                    lat_samples.append(parts[lat_idx])
+                    long_samples.append(parts[long_idx])
 
                 # Determine hemisphere by checking if most longitudes start with '-'
-                negative_count = sum(1 for sample in data_samples if sample.startswith("-"))
-                
-                if negative_count > len(data_samples) / 2:
+                negative_count = sum(1 for sample in long_samples if sample.startswith("-"))
+
+                if negative_count > len(long_samples) / 2:
                     is_eastern = False  # Western hemisphere (most samples negative)
                     log_message(f"Determined Western hemisphere from data samples (negative longitudes)")
                 else:
                     # If most values don't start with '-', try to determine from other sources
-                    if data_samples:
+                    if lat_samples and long_samples:
                         try:
-                            sample_lat = float(data_samples[0].replace("+", ""))
-                            sample_long = float(data_samples[0].replace("-", "").replace("+", ""))
+                            # Get the actual lat/long values in RaceLogic minutes format
+                            sample_lat = abs(float(lat_samples[0].replace("+", "").replace("-", "").replace(",", ".")))
+                            sample_long = abs(float(long_samples[0].replace("+", "").replace("-", "").replace(",", ".")))
                             west_hemisphere = determine_hemisphere(
-                                track_name, 
-                                xml_db, 
-                                sample_lat, 
+                                track_name,
+                                xml_db,
+                                sample_lat,
                                 sample_long,
                                 cfg_file
                             )
@@ -452,10 +455,390 @@ def parse_track_data_file(data_path, xml_db, track_name, cfg_file=None):
     return []
 
 
+def haversine_distance(lat1, lon1, lat2, lon2):
+    """Calculate the great circle distance between two points in meters"""
+    R = 6371000  # Earth's radius in meters
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    delta_phi = math.radians(lat2 - lat1)
+    delta_lambda = math.radians(lon2 - lon1)
+
+    a = math.sin(delta_phi/2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda/2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+
+    return R * c
+
+
+def close_boundary_loop(boundary, max_gap_meters=50):
+    """
+    Ensure a boundary forms a closed loop by connecting end to start if needed.
+
+    Args:
+        boundary: list of points
+        max_gap_meters: maximum gap to close (don't close if gap is too large)
+
+    Returns:
+        Boundary with loop closed (last point connects to first)
+    """
+    if len(boundary) < 3:
+        return boundary
+
+    first = boundary[0]
+    last = boundary[-1]
+
+    gap = haversine_distance(first['lat'], first['long'], last['lat'], last['long'])
+
+    if gap > 1 and gap < max_gap_meters:
+        # Add a copy of the first point at the end to close the loop
+        boundary = boundary + [first.copy()]
+        log_message(f"Closed boundary loop (gap was {gap:.1f}m)")
+
+    return boundary
+
+
+def remove_crossing_artifacts(boundary, position='start', angle_threshold=50):
+    """
+    Remove crossing artifacts from a boundary.
+    These are points where the path makes a sharp turn (near 90 degrees)
+    indicating the crossing from one side of the track to the other.
+
+    Args:
+        boundary: list of points
+        position: 'start' or 'end' - where to look for artifacts
+        angle_threshold: minimum angle change (degrees) to consider as crossing artifact
+
+    Returns:
+        Cleaned boundary with crossing artifacts removed
+    """
+    if len(boundary) < 10:
+        return boundary
+
+    # Calculate angle changes for each point
+    def calc_angle_change(p_prev, p_curr, p_next):
+        v1_lat = p_curr['lat'] - p_prev['lat']
+        v1_lon = p_curr['long'] - p_prev['long']
+        v2_lat = p_next['lat'] - p_curr['lat']
+        v2_lon = p_next['long'] - p_curr['long']
+
+        dot = v1_lat * v2_lat + v1_lon * v2_lon
+        mag1 = math.sqrt(v1_lat**2 + v1_lon**2)
+        mag2 = math.sqrt(v2_lat**2 + v2_lon**2)
+
+        if mag1 < 0.0000001 or mag2 < 0.0000001:
+            return 0
+
+        cos_angle = max(-1, min(1, dot / (mag1 * mag2)))
+        return math.degrees(math.acos(cos_angle))
+
+    # Search region - first or last 10% of boundary, max 20 points
+    search_count = min(20, len(boundary) // 10)
+
+    if position == 'start':
+        # Find first sharp turn from the start
+        trim_to = 0
+        for i in range(1, min(search_count, len(boundary) - 1)):
+            angle = calc_angle_change(boundary[i-1], boundary[i], boundary[i+1])
+            if angle > angle_threshold:
+                trim_to = i + 1  # Trim up to and including this point
+                log_message(f"Found crossing artifact at start, index {i}, angle {angle:.1f}°")
+
+        if trim_to > 0:
+            return boundary[trim_to:]
+
+    elif position == 'end':
+        # Find last sharp turn from the end
+        trim_from = len(boundary)
+        for i in range(len(boundary) - 2, max(len(boundary) - search_count, 0), -1):
+            angle = calc_angle_change(boundary[i-1], boundary[i], boundary[i+1])
+            if angle > angle_threshold:
+                trim_from = i  # Trim from this point onwards
+                log_message(f"Found crossing artifact at end, index {i}, angle {angle:.1f}°")
+
+        if trim_from < len(boundary):
+            return boundary[:trim_from]
+
+    return boundary
+
+
+def detect_and_split_boundaries(parsed_data, threshold_meters=20.0, min_boundary_points=50):
+    """
+    Detect if track data contains two concatenated boundaries and split them.
+    Also detects and trims "crossing" segments where the path jumps between boundaries.
+
+    Returns:
+        dict with keys:
+        - 'type': 'single' or 'dual'
+        - 'boundary1': list of points (outer boundary or single path)
+        - 'boundary2': list of points (inner boundary) or None
+        - 'split_index': index where split occurred or None
+    """
+    if len(parsed_data) < min_boundary_points * 2:
+        # Too few points to have two meaningful boundaries
+        log_message(f"Track has {len(parsed_data)} points, treating as single boundary")
+        return {
+            'type': 'single',
+            'boundary1': parsed_data,
+            'boundary2': None,
+            'split_index': None
+        }
+
+    start_lat = parsed_data[0]['lat']
+    start_lon = parsed_data[0]['long']
+
+    # Search for a point that returns close to start (not at the very end)
+    # Skip the first 10% and last 10% of points
+    search_start = int(len(parsed_data) * 0.1)
+    search_end = int(len(parsed_data) * 0.9)
+
+    best_match_idx = None
+    best_match_dist = float('inf')
+
+    for i in range(search_start, search_end):
+        dist = haversine_distance(
+            start_lat, start_lon,
+            parsed_data[i]['lat'], parsed_data[i]['long']
+        )
+
+        if dist < threshold_meters and dist < best_match_dist:
+            best_match_dist = dist
+            best_match_idx = i
+
+    if best_match_idx is not None:
+        # Found a split point - we have two boundaries
+        # Both boundaries are nearly-closed loops that meet at the split point
+        log_message(f"Detected dual boundaries: split at index {best_match_idx} "
+                   f"(distance to start: {best_match_dist:.2f}m)")
+
+        # Boundary1: from start to split point (outer loop)
+        # Boundary2: from split point to end (inner loop)
+        # Both form closed loops since they start/end at nearly the same point
+        boundary1 = parsed_data[:best_match_idx + 1]
+        boundary2 = parsed_data[best_match_idx:]
+
+        # Clean up crossing artifacts from both boundaries
+        boundary1 = remove_crossing_artifacts(boundary1, position='end')
+        boundary2 = remove_crossing_artifacts(boundary2, position='start')
+
+        # Close the boundary loops by connecting end back to start
+        # This fills the gap created by trimming crossing artifacts
+        boundary1 = close_boundary_loop(boundary1)
+        boundary2 = close_boundary_loop(boundary2)
+
+        log_message(f"Split boundaries: boundary1={len(boundary1)} pts, "
+                   f"boundary2={len(boundary2)} pts")
+
+        return {
+            'type': 'dual',
+            'boundary1': boundary1,
+            'boundary2': boundary2,
+            'split_index': best_match_idx
+        }
+    else:
+        # No split found - single boundary (might be a hillclimb or single loop)
+        log_message(f"No boundary split detected, treating as single boundary")
+        return {
+            'type': 'single',
+            'boundary1': parsed_data,
+            'boundary2': None,
+            'split_index': None
+        }
+
+
+def resample_boundary(boundary_points, num_points):
+    """
+    Resample a boundary to have a specific number of equally-spaced points.
+    Uses linear interpolation along the path.
+    """
+    if len(boundary_points) < 2:
+        return boundary_points
+
+    # Calculate cumulative distance along the boundary
+    distances = [0.0]
+    for i in range(1, len(boundary_points)):
+        d = haversine_distance(
+            boundary_points[i-1]['lat'], boundary_points[i-1]['long'],
+            boundary_points[i]['lat'], boundary_points[i]['long']
+        )
+        distances.append(distances[-1] + d)
+
+    total_distance = distances[-1]
+    if total_distance < 1:  # Less than 1 meter total
+        return boundary_points
+
+    # Generate equally-spaced target distances
+    target_distances = [total_distance * i / (num_points - 1) for i in range(num_points)]
+
+    # Interpolate points at target distances
+    resampled = []
+    boundary_idx = 0
+
+    for target_dist in target_distances:
+        # Find the segment containing this distance
+        while boundary_idx < len(distances) - 1 and distances[boundary_idx + 1] < target_dist:
+            boundary_idx += 1
+
+        if boundary_idx >= len(boundary_points) - 1:
+            # At or past the end
+            resampled.append(boundary_points[-1].copy())
+        else:
+            # Interpolate between boundary_idx and boundary_idx + 1
+            seg_start_dist = distances[boundary_idx]
+            seg_end_dist = distances[boundary_idx + 1]
+            seg_length = seg_end_dist - seg_start_dist
+
+            if seg_length < 0.001:
+                t = 0
+            else:
+                t = (target_dist - seg_start_dist) / seg_length
+
+            p1 = boundary_points[boundary_idx]
+            p2 = boundary_points[boundary_idx + 1]
+
+            resampled.append({
+                'lat': p1['lat'] + t * (p2['lat'] - p1['lat']),
+                'long': p1['long'] + t * (p2['long'] - p1['long']),
+                'height': p1.get('height', 0) + t * (p2.get('height', 0) - p1.get('height', 0))
+            })
+
+    return resampled
+
+
+def generate_centerline(boundary1, boundary2, num_points=200):
+    """
+    Generate a centerline by averaging corresponding points from two boundaries.
+    Both boundaries are resampled to have the same number of points.
+    Auto-detects and corrects if boundaries are traced in opposite directions.
+    """
+    log_message(f"Generating centerline from {len(boundary1)} and {len(boundary2)} boundary points")
+
+    # Check if boundaries are traced in opposite directions
+    # Sample a few points and compare distances
+    sample_pts = 5
+    b1_sample = resample_boundary(boundary1, sample_pts)
+    b2_sample = resample_boundary(boundary2, sample_pts)
+    b2_rev_sample = resample_boundary(list(reversed(boundary2)), sample_pts)
+
+    avg_normal = sum(
+        haversine_distance(b1_sample[i]['lat'], b1_sample[i]['long'],
+                          b2_sample[i]['lat'], b2_sample[i]['long'])
+        for i in range(sample_pts)
+    ) / sample_pts
+
+    avg_reversed = sum(
+        haversine_distance(b1_sample[i]['lat'], b1_sample[i]['long'],
+                          b2_rev_sample[i]['lat'], b2_rev_sample[i]['long'])
+        for i in range(sample_pts)
+    ) / sample_pts
+
+    if avg_reversed < avg_normal:
+        log_message(f"Boundaries traced in opposite directions (normal={avg_normal:.0f}m, reversed={avg_reversed:.0f}m) - reversing boundary2")
+        boundary2 = list(reversed(boundary2))
+    else:
+        log_message(f"Boundaries traced in same direction (normal={avg_normal:.0f}m, reversed={avg_reversed:.0f}m)")
+
+    # Resample both boundaries to have equal number of points
+    b1_resampled = resample_boundary(boundary1, num_points)
+    b2_resampled = resample_boundary(boundary2, num_points)
+
+    # Calculate distances between corresponding points to detect crossing artifacts
+    distances = []
+    for i in range(num_points):
+        d = haversine_distance(
+            b1_resampled[i]['lat'], b1_resampled[i]['long'],
+            b2_resampled[i]['lat'], b2_resampled[i]['long']
+        )
+        distances.append(d)
+
+    # Find median distance (typical track width)
+    sorted_distances = sorted(distances)
+    median_width = sorted_distances[len(sorted_distances) // 2]
+    min_valid_width = median_width * 0.3  # Points closer than 30% of median are suspect
+
+    log_message(f"Track width - median: {median_width:.1f}m, min valid: {min_valid_width:.1f}m")
+
+    # Generate centerline, interpolating across points where boundaries converge (crossing artifact)
+    centerline = []
+    for i in range(num_points):
+        p1 = b1_resampled[i]
+        p2 = b2_resampled[i]
+
+        if distances[i] >= min_valid_width:
+            # Normal point - average the two boundaries
+            centerline.append({
+                'lat': (p1['lat'] + p2['lat']) / 2,
+                'long': (p1['long'] + p2['long']) / 2,
+                'height': (p1.get('height', 0) + p2.get('height', 0)) / 2
+            })
+        else:
+            # Crossing artifact - find nearest valid points and interpolate
+            # Look for previous and next valid points
+            prev_valid = None
+            next_valid = None
+
+            for j in range(i - 1, -1, -1):
+                if distances[j] >= min_valid_width:
+                    prev_valid = j
+                    break
+
+            for j in range(i + 1, num_points):
+                if distances[j] >= min_valid_width:
+                    next_valid = j
+                    break
+
+            # For closed loops, wrap around to find valid points
+            if prev_valid is None:
+                # Search from end of array (wrap around)
+                for j in range(num_points - 1, i, -1):
+                    if distances[j] >= min_valid_width:
+                        prev_valid = j - num_points  # Negative index for interpolation math
+                        break
+
+            if next_valid is None:
+                # Search from start of array (wrap around)
+                for j in range(0, i):
+                    if distances[j] >= min_valid_width:
+                        next_valid = j + num_points  # Extended index for interpolation math
+                        break
+
+            if prev_valid is not None and next_valid is not None:
+                # Interpolate between previous and next valid centerline points
+                prev_idx = prev_valid % num_points
+                next_idx = next_valid % num_points
+
+                # Calculate interpolation factor
+                span = next_valid - prev_valid
+                t = (i - prev_valid) / span if span != 0 else 0.5
+
+                prev_center_lat = (b1_resampled[prev_idx]['lat'] + b2_resampled[prev_idx]['lat']) / 2
+                prev_center_lon = (b1_resampled[prev_idx]['long'] + b2_resampled[prev_idx]['long']) / 2
+                next_center_lat = (b1_resampled[next_idx]['lat'] + b2_resampled[next_idx]['lat']) / 2
+                next_center_lon = (b1_resampled[next_idx]['long'] + b2_resampled[next_idx]['long']) / 2
+
+                centerline.append({
+                    'lat': prev_center_lat + t * (next_center_lat - prev_center_lat),
+                    'long': prev_center_lon + t * (next_center_lon - prev_center_lon),
+                    'height': (p1.get('height', 0) + p2.get('height', 0)) / 2
+                })
+                log_message(f"Interpolated crossing artifact at point {i} (width={distances[i]:.1f}m)")
+            else:
+                # Fallback - just use the average
+                centerline.append({
+                    'lat': (p1['lat'] + p2['lat']) / 2,
+                    'long': (p1['long'] + p2['long']) / 2,
+                    'height': (p1.get('height', 0) + p2.get('height', 0)) / 2
+                })
+
+    log_message(f"Generated centerline with {len(centerline)} points")
+    return centerline
+
+
 def generate_kml(parsed_data, track_info):
-    """Generate KML content from parsed data"""
+    """Generate KML content from parsed data with proper boundary separation"""
     track_name = track_info.get("name", "Unknown Track")
     log_message(f"Generating KML for track: {track_name} with {len(parsed_data)} points")
+
+    # Detect and split boundaries
+    boundaries = detect_and_split_boundaries(parsed_data)
 
     start_coord = None
     finish_coord = None
@@ -474,37 +857,186 @@ def generate_kml(parsed_data, track_info):
         elif name == "Finish":
             finish_coord = (long, lat)
 
-    # Start KML document
+    # Start KML document with styles for both boundaries
     kml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
   <Document>
     <name>{track_name} Track Map</name>
     <description>Converted from RaceLogic data</description>
 
-    <Style id="trackStyle">
+    <Style id="outerBoundaryStyle">
       <LineStyle><color>ff0000ff</color><width>4</width></LineStyle>
+    </Style>
+    <Style id="innerBoundaryStyle">
+      <LineStyle><color>ffff0000</color><width>4</width></LineStyle>
     </Style>
     <Style id="startFinishStyle">
       <LineStyle><color>ff00ff00</color><width>6</width></LineStyle>
     </Style>
+    <Style id="startFinishLineStyle">
+      <LineStyle><color>ff00ff00</color><width>3</width></LineStyle>
+    </Style>
+    <Style id="centerlineStyle">
+      <LineStyle><color>ff00ffff</color><width>5</width></LineStyle>
+    </Style>"""
+
+    if boundaries['type'] == 'dual':
+        # Output two separate boundaries
+        log_message(f"Generating KML with dual boundaries: "
+                   f"outer={len(boundaries['boundary1'])} pts, "
+                   f"inner={len(boundaries['boundary2'])} pts")
+
+        # Outer boundary (first path)
+        kml += """
 
     <Placemark>
-      <name>Track Path</name>
-      <styleUrl>#trackStyle</styleUrl>
+      <name>Outer Boundary</name>
+      <styleUrl>#outerBoundaryStyle</styleUrl>
       <LineString>
         <tessellate>1</tessellate>
         <coordinates>"""
 
-    for point in parsed_data:
-        kml += f"\n          {point['long']:.8f},{point['lat']:.8f},{point['height']:.1f}"
+        for point in boundaries['boundary1']:
+            kml += f"\n          {point['long']:.8f},{point['lat']:.8f},{point.get('height', 0):.1f}"
 
-    kml += """
+        kml += """
         </coordinates>
       </LineString>
     </Placemark>"""
 
+        # Inner boundary (second path)
+        kml += """
+
+    <Placemark>
+      <name>Inner Boundary</name>
+      <styleUrl>#innerBoundaryStyle</styleUrl>
+      <LineString>
+        <tessellate>1</tessellate>
+        <coordinates>"""
+
+        for point in boundaries['boundary2']:
+            kml += f"\n          {point['long']:.8f},{point['lat']:.8f},{point.get('height', 0):.1f}"
+
+        kml += """
+        </coordinates>
+      </LineString>
+    </Placemark>"""
+
+        # Centerline generation disabled for now
+        # centerline = generate_centerline(boundaries['boundary1'], boundaries['boundary2'], num_points=300)
+        #
+        # kml += """
+        #
+        #     <Placemark>
+        #       <name>Centerline</name>
+        #       <description>Racing line for lap timing and delta calculation</description>
+        #       <styleUrl>#centerlineStyle</styleUrl>
+        #       <LineString>
+        #         <tessellate>1</tessellate>
+        #         <coordinates>"""
+        #
+        # for point in centerline:
+        #     kml += f"\n          {point['long']:.8f},{point['lat']:.8f},{point.get('height', 0):.1f}"
+        #
+        # kml += """
+        #         </coordinates>
+        #       </LineString>
+        #     </Placemark>"""
+
+        # Generate start/finish line across the track if we have both boundaries
+        if start_coord:
+            # Find closest points on each boundary to the start/finish coordinate
+            sf_outer = find_closest_point(boundaries['boundary1'], start_coord[1], start_coord[0])
+            sf_inner = find_closest_point(boundaries['boundary2'], start_coord[1], start_coord[0])
+
+            if sf_outer and sf_inner:
+                kml += f"""
+
+    <Placemark>
+      <name>{'Start' if finish_coord else 'Start / Finish'} Line</name>
+      <styleUrl>#startFinishLineStyle</styleUrl>
+      <LineString>
+        <tessellate>1</tessellate>
+        <coordinates>
+          {sf_outer['long']:.8f},{sf_outer['lat']:.8f},0
+          {sf_inner['long']:.8f},{sf_inner['lat']:.8f},0
+        </coordinates>
+      </LineString>
+    </Placemark>"""
+
+    else:
+        # Single boundary (hillclimb or single loop)
+        log_message(f"Generating KML with single boundary: {len(boundaries['boundary1'])} pts")
+
+        kml += """
+
+    <Placemark>
+      <name>Track Path</name>
+      <styleUrl>#outerBoundaryStyle</styleUrl>
+      <LineString>
+        <tessellate>1</tessellate>
+        <coordinates>"""
+
+        for point in boundaries['boundary1']:
+            kml += f"\n          {point['long']:.8f},{point['lat']:.8f},{point.get('height', 0):.1f}"
+
+        kml += """
+        </coordinates>
+      </LineString>
+    </Placemark>"""
+
+        # Generate start/finish lines for single-boundary tracks (hillclimbs)
+        # Use the database coordinates for position, track points for direction
+        if start_coord:
+            _, start_idx = find_closest_point_with_index(boundaries['boundary1'], start_coord[1], start_coord[0])
+            if start_idx >= 0:
+                p1, p2 = generate_perpendicular_line_at_coord(
+                    boundaries['boundary1'], start_idx,
+                    start_coord[1], start_coord[0],  # Use actual database coords
+                    half_width_meters=8.0
+                )
+                if p1 and p2:
+                    kml += f"""
+
+    <Placemark>
+      <name>{'Start Line' if finish_coord else 'Start / Finish Line'}</name>
+      <styleUrl>#startFinishLineStyle</styleUrl>
+      <LineString>
+        <tessellate>1</tessellate>
+        <coordinates>
+          {p1['long']:.8f},{p1['lat']:.8f},0
+          {p2['long']:.8f},{p2['lat']:.8f},0
+        </coordinates>
+      </LineString>
+    </Placemark>"""
+
+        if finish_coord:
+            _, finish_idx = find_closest_point_with_index(boundaries['boundary1'], finish_coord[1], finish_coord[0])
+            if finish_idx >= 0:
+                p1, p2 = generate_perpendicular_line_at_coord(
+                    boundaries['boundary1'], finish_idx,
+                    finish_coord[1], finish_coord[0],  # Use actual database coords
+                    half_width_meters=8.0
+                )
+                if p1 and p2:
+                    kml += f"""
+
+    <Placemark>
+      <name>Finish Line</name>
+      <styleUrl>#startFinishLineStyle</styleUrl>
+      <LineString>
+        <tessellate>1</tessellate>
+        <coordinates>
+          {p1['long']:.8f},{p1['lat']:.8f},0
+          {p2['long']:.8f},{p2['lat']:.8f},0
+        </coordinates>
+      </LineString>
+    </Placemark>"""
+
+    # Add start/finish point markers
     if start_coord:
         kml += f"""
+
     <Placemark>
       <name>{'Start' if finish_coord else 'Start / Finish'}</name>
       <styleUrl>#startFinishStyle</styleUrl>
@@ -515,6 +1047,7 @@ def generate_kml(parsed_data, track_info):
 
     if finish_coord:
         kml += f"""
+
     <Placemark>
       <name>Finish</name>
       <styleUrl>#startFinishStyle</styleUrl>
@@ -528,6 +1061,121 @@ def generate_kml(parsed_data, track_info):
 </kml>"""
 
     return kml
+
+
+def find_closest_point(boundary_points, target_lat, target_lon):
+    """Find the point in a boundary closest to a target coordinate"""
+    if not boundary_points:
+        return None
+
+    closest_point = None
+    min_dist = float('inf')
+
+    for point in boundary_points:
+        dist = haversine_distance(target_lat, target_lon, point['lat'], point['long'])
+        if dist < min_dist:
+            min_dist = dist
+            closest_point = point
+
+    return closest_point
+
+
+def find_closest_point_with_index(boundary_points, target_lat, target_lon):
+    """Find the point and its index in a boundary closest to a target coordinate"""
+    if not boundary_points:
+        return None, -1
+
+    closest_point = None
+    closest_idx = -1
+    min_dist = float('inf')
+
+    for i, point in enumerate(boundary_points):
+        dist = haversine_distance(target_lat, target_lon, point['lat'], point['long'])
+        if dist < min_dist:
+            min_dist = dist
+            closest_point = point
+            closest_idx = i
+
+    return closest_point, closest_idx
+
+
+def generate_perpendicular_line(boundary_points, center_idx, half_width_meters=8.0):
+    """
+    Generate a line perpendicular to the track at the given index.
+    Returns two points representing the line endpoints.
+    """
+    if not boundary_points or center_idx < 0 or center_idx >= len(boundary_points):
+        return None, None
+
+    center = boundary_points[center_idx]
+    return generate_perpendicular_line_at_coord(
+        boundary_points, center_idx,
+        center['lat'], center['long'],
+        half_width_meters
+    )
+
+
+def generate_perpendicular_line_at_coord(boundary_points, direction_idx, center_lat, center_lon, half_width_meters=8.0):
+    """
+    Generate a line perpendicular to the track direction at a specific coordinate.
+    Uses boundary_points[direction_idx] and neighbors to determine track direction,
+    but places the line at (center_lat, center_lon).
+    Returns two points representing the line endpoints.
+    """
+    if not boundary_points or direction_idx < 0 or direction_idx >= len(boundary_points):
+        return None, None
+
+    # Get neighboring points to determine track direction
+    prev_idx = max(0, direction_idx - 1)
+    next_idx = min(len(boundary_points) - 1, direction_idx + 1)
+
+    prev_point = boundary_points[prev_idx]
+    next_point = boundary_points[next_idx]
+
+    # Calculate track direction vector (in degrees, approximately)
+    dlat = next_point['lat'] - prev_point['lat']
+    dlon = next_point['long'] - prev_point['long']
+
+    # Perpendicular direction (rotate 90 degrees)
+    # For a vector (dlat, dlon), perpendicular is (-dlon, dlat)
+    perp_lat = -dlon
+    perp_lon = dlat
+
+    # Normalize and scale to desired width
+    # Convert to approximate meters (very rough: 1 degree lat ≈ 111km, 1 degree lon ≈ 111km * cos(lat))
+    lat_rad = math.radians(center_lat)
+    meters_per_deg_lat = 111320
+    meters_per_deg_lon = 111320 * math.cos(lat_rad)
+
+    # Convert perpendicular vector to meters
+    perp_lat_m = perp_lat * meters_per_deg_lat
+    perp_lon_m = perp_lon * meters_per_deg_lon
+
+    # Normalize
+    length = math.sqrt(perp_lat_m**2 + perp_lon_m**2)
+    if length < 0.001:
+        return None, None
+
+    perp_lat_m /= length
+    perp_lon_m /= length
+
+    # Scale to half_width_meters and convert back to degrees
+    offset_lat = (perp_lat_m * half_width_meters) / meters_per_deg_lat
+    offset_lon = (perp_lon_m * half_width_meters) / meters_per_deg_lon
+
+    # Generate the two endpoints centered at the specified coordinate
+    point1 = {
+        'lat': center_lat + offset_lat,
+        'long': center_lon + offset_lon,
+        'height': 0
+    }
+    point2 = {
+        'lat': center_lat - offset_lat,
+        'long': center_lon - offset_lon,
+        'height': 0
+    }
+
+    return point1, point2
 
 
 def create_kmz(kml_content, output_path):

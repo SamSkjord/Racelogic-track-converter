@@ -1,2 +1,4 @@
 /output
 *.log
+*.pyc
+.DS_Store

@@ -167,7 +167,22 @@ def find_track_data_file(track_name, root_dir):
 # =============================================================================
 
 def parse_track_data_file(data_path, xml_db, track_name, cfg_file=None):
-    """Parse a track data file in RaceLogic format."""
+    """
+    Parse a track data file in RaceLogic CIR format.
+
+    CIR files contain GPS boundary points in RaceLogic's "minutes" format
+    (degrees * 60). The file has sections like [column names] and [data].
+
+    Args:
+        data_path: Path to .CIR file
+        xml_db: Parsed XML database root (for hemisphere detection fallback)
+        track_name: Track name (for hemisphere detection fallback)
+        cfg_file: Optional .CFG file path (primary hemisphere source)
+
+    Returns:
+        List of dicts with keys: lat, long, velocity, heading, height
+        All coordinates are decimal degrees. Empty list on error.
+    """
     log_message(f"Parsing track data file: {data_path}")
 
     is_eastern = None

@@ -11,8 +11,9 @@ import os
 import zipfile
 import math
 
+from tracks_db import haversine_distance
 from racelogic_parser import convert_to_decimal_degrees
-from racelogic_boundary import detect_and_split_boundaries, haversine_distance
+from racelogic_boundary import detect_and_split_boundaries
 
 
 def log_message(message):
@@ -125,7 +126,20 @@ def generate_perpendicular_line_at_coord(boundary_points, direction_idx, center_
 # =============================================================================
 
 def generate_kml(parsed_data, track_info):
-    """Generate KML content from parsed data with proper boundary separation."""
+    """
+    Generate KML content from parsed track data.
+
+    Automatically detects and splits dual boundaries, adds start/finish
+    markers and lines perpendicular to the track direction.
+
+    Args:
+        parsed_data: List of points with 'lat', 'long', 'height' keys
+        track_info: Dict with 'name' and 'splitinfo' (list of S/F markers)
+                   Each splitinfo entry has 'name', 'lat', 'long' keys
+
+    Returns:
+        KML document as string, ready for packaging into KMZ
+    """
     track_name = track_info.get("name", "Unknown Track")
     log_message(f"Generating KML for track: {track_name} with {len(parsed_data)} points")
 
@@ -331,7 +345,9 @@ def generate_kml(parsed_data, track_info):
 def create_kmz(kml_content, output_path):
     """Create a KMZ file (zipped KML) for Google Earth."""
     try:
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
         log_message(f"Creating KMZ file: {output_path}")
 
         with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as kmz_file:

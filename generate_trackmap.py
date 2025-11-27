@@ -8,13 +8,12 @@ import sys
 import os
 from PIL import Image, ImageDraw
 
-# Import from main converter
+# Import from converter modules
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from racelogic_converter import (
-    find_database_file, get_track_info_from_database,
-    parse_track_data_file, detect_and_split_boundaries,
-    find_closest_point, haversine_distance
-)
+from tracks_db import haversine_distance
+from racelogic_parser import find_database_file, get_track_info_from_database, parse_track_data_file
+from racelogic_boundary import detect_and_split_boundaries
+from racelogic_kml import find_closest_point
 
 
 def coords_to_pixels(points, width, height, padding=20):
@@ -114,7 +113,7 @@ def generate_track_image(track_name, root_dir, output_path, width=800, height=80
 
         # Generate centerline by finding closest point on inner for each outer point
         # This handles boundaries that aren't aligned at same track positions
-        from racelogic_converter import resample_boundary, haversine_distance
+        from racelogic_boundary import resample_boundary
 
         # Resample outer to reasonable number of points
         outer_resampled = resample_boundary(outer, 500)

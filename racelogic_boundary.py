@@ -10,6 +10,17 @@ Handles:
 
 import math
 
+from tracks_db import haversine_distance
+
+# =============================================================================
+# Constants
+# =============================================================================
+
+BOUNDARY_SPLIT_THRESHOLD_M = 20.0  # Max distance to consider as "returning to start"
+MIN_BOUNDARY_POINTS = 50  # Minimum points per boundary for dual detection
+CROSSING_ANGLE_THRESHOLD_DEG = 50  # Angle change indicating crossing artifact
+MAX_LOOP_GAP_METERS = 50  # Maximum gap to auto-close
+
 
 def log_message(message):
     """Logging stub - replaced at runtime by main module."""
@@ -23,28 +34,10 @@ def set_logger(logger_func):
 
 
 # =============================================================================
-# Distance Calculation
-# =============================================================================
-
-def haversine_distance(lat1, lon1, lat2, lon2):
-    """Calculate the great circle distance between two points in meters."""
-    R = 6371000  # Earth's radius in meters
-    phi1 = math.radians(lat1)
-    phi2 = math.radians(lat2)
-    delta_phi = math.radians(lat2 - lat1)
-    delta_lambda = math.radians(lon2 - lon1)
-
-    a = math.sin(delta_phi/2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda/2)**2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
-
-    return R * c
-
-
-# =============================================================================
 # Boundary Loop Handling
 # =============================================================================
 
-def close_boundary_loop(boundary, max_gap_meters=50):
+def close_boundary_loop(boundary, max_gap_meters=MAX_LOOP_GAP_METERS):
     """
     Ensure a boundary forms a closed loop by connecting end to start if needed.
 
@@ -70,7 +63,7 @@ def close_boundary_loop(boundary, max_gap_meters=50):
     return boundary
 
 
-def remove_crossing_artifacts(boundary, position='start', angle_threshold=50):
+def remove_crossing_artifacts(boundary, position='start', angle_threshold=CROSSING_ANGLE_THRESHOLD_DEG):
     """
     Remove crossing artifacts from a boundary.
 
@@ -135,7 +128,7 @@ def remove_crossing_artifacts(boundary, position='start', angle_threshold=50):
 # Boundary Detection & Splitting
 # =============================================================================
 
-def detect_and_split_boundaries(parsed_data, threshold_meters=20.0, min_boundary_points=50):
+def detect_and_split_boundaries(parsed_data, threshold_meters=BOUNDARY_SPLIT_THRESHOLD_M, min_boundary_points=MIN_BOUNDARY_POINTS):
     """
     Detect if track data contains two concatenated boundaries and split them.
 

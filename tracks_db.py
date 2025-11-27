@@ -210,7 +210,9 @@ class TracksDB:
 
     def connect(self):
         """Connect to database and initialize schema."""
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        db_dir = os.path.dirname(self.db_path)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
         self.conn = sqlite3.connect(self.db_path)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
@@ -240,7 +242,8 @@ class TracksDB:
                   region: str = None,
                   source_file: str = None,
                   gate_width: float = None,
-                  replace: bool = False) -> int:
+                  replace: bool = False,
+                  _commit: bool = True) -> int:
         """
         Add a track to the database.
 
@@ -255,6 +258,7 @@ class TracksDB:
             source_file: Original file path
             gate_width: Gate width in meters
             replace: If True, replace existing track with same name
+            _commit: If False, skip commit (for bulk imports)
 
         Returns:
             Track ID
@@ -315,7 +319,8 @@ class TracksDB:
             VALUES (?, ?, ?, ?, ?)
         """, (track_id, min_lon, max_lon, min_lat, max_lat))
 
-        self.conn.commit()
+        if _commit:
+            self.conn.commit()
         return track_id
 
     def find_nearby(self,
@@ -454,6 +459,8 @@ def import_racelogic_xml(db: TracksDB, xml_path: str, skip_combo: bool = True,
     """
     Import tracks from RaceLogic StartFinishDataBase.xml.
 
+    Uses batch mode for performance - single commit at end.
+
     Args:
         db: TracksDB instance
         xml_path: Path to StartFinishDataBase.xml
@@ -474,6 +481,7 @@ def import_racelogic_xml(db: TracksDB, xml_path: str, skip_combo: bool = True,
         'by_country': {}
     }
 
+    # Use batch mode - defer commits until end
     for country_elem in root.findall('.//country'):
         country_name = country_elem.get('name')
 
@@ -547,7 +555,8 @@ def import_racelogic_xml(db: TracksDB, xml_path: str, skip_combo: bool = True,
                     country=country_name,
                     gate_width=gate_width,
                     source_file=os.path.basename(xml_path),
-                    replace=replace
+                    replace=replace,
+                    _commit=False  # Batch mode - commit at end
                 )
 
                 if existing and replace:
@@ -563,6 +572,8 @@ def import_racelogic_xml(db: TracksDB, xml_path: str, skip_combo: bool = True,
                 print(f"  Error importing {name}: {e}")
                 stats['errors'] += 1
 
+    # Commit all changes at once (batch mode)
+    db.conn.commit()
     return stats
 
 
@@ -573,7 +584,11 @@ def import_racelogic_xml(db: TracksDB, xml_path: str, skip_combo: bool = True,
 def parse_kmz_track(kmz_path: str) -> Dict:
     """Extract track data from a KMZ file."""
     with zipfile.ZipFile(kmz_path, 'r') as z:
-        kml_content = z.read('doc.kml').decode('utf-8')
+        # Find the KML file (usually doc.kml but not always)
+        kml_files = [n for n in z.namelist() if n.lower().endswith('.kml')]
+        if not kml_files:
+            raise ValueError(f"No KML file found in {kmz_path}")
+        kml_content = z.read(kml_files[0]).decode('utf-8')
 
     root = ET.fromstring(kml_content)
     ns = {
@@ -706,8 +721,8 @@ if __name__ == "__main__":
             stats = import_racelogic_xml(db, xml_path)
             print(f"\n=== Import Complete ===")
             print(f"Imported: {stats['imported']}")
+            print(f"Replaced: {stats['replaced']}")
             print(f"Skipped (combo): {stats['skipped_combo']}")
-            print(f"Skipped (duplicate): {stats['skipped_duplicate']}")
             print(f"Errors: {stats['errors']}")
             print(f"\nBy country (top 10):")
             sorted_countries = sorted(stats['by_country'].items(), key=lambda x: -x[1])[:10]

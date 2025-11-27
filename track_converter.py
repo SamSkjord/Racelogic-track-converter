@@ -89,6 +89,10 @@ def import_all():
     os.makedirs(MAPS_DIR, exist_ok=True)
 
     # Find KMZ files
+    if not os.path.exists(IMPORT_DIR):
+        print("No import/ folder found.")
+        return
+
     kmz_files = [f for f in os.listdir(IMPORT_DIR) if f.lower().endswith('.kmz')]
 
     if not kmz_files:

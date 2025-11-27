@@ -12,6 +12,17 @@ Both converters:
 - Support upsert (replace existing tracks with same name)
 - Remove source files after successful import
 
+## Module Structure
+
+```
+track_converter.py       # Custom KMZ import (158 lines)
+racelogic_converter.py   # Main RaceLogic orchestrator (266 lines)
+├── racelogic_parser.py    # CIR parsing, coordinates, hemisphere (340 lines)
+├── racelogic_boundary.py  # Boundary split, cleanup, centerline (290 lines)
+└── racelogic_kml.py       # KML/KMZ generation (280 lines)
+tracks_db.py             # Shared database module (780 lines)
+```
+
 ## Folder Structure
 
 ```
@@ -70,6 +81,10 @@ Two-stage filtering for `find_nearby(lat, lon, radius_km)`:
 1. **Geohash prefix** - Fast elimination of distant tracks
 2. **Haversine distance** - Accurate filtering of remaining candidates
 
+### Bulk Import Performance
+
+`import_racelogic_xml()` uses batch mode (`_commit=False`) for ~10x faster imports.
+
 ## Custom Track KMZ Format
 
 Custom tracks are Google Earth KMZ files containing:
@@ -81,14 +96,35 @@ Track type auto-detected:
 - `loop` - Single Start/Finish marker
 - `point_to_point` - Separate Start and Finish markers
 
-## RaceLogic Converter Details
+## RaceLogic Converter Modules
 
-### Problem Solved
+### racelogic_parser.py
 
-RaceLogic .CIR files contain GPS boundary data in a concatenated format:
-- Two track boundaries (inner and outer) stored as a single continuous path
-- Path traces one boundary, crosses to the other side, traces back
-- Creates visual artifacts when rendered directly
+CIR file parsing and coordinate handling:
+- `convert_to_decimal_degrees()` - RaceLogic minutes ÷ 60
+- `parse_track_data_file()` - Parse .CIR files with hemisphere detection
+- `determine_hemisphere()` - From CFG file, database, or geography
+- `find_database_file()` - Locate StartFinishDataBase.xml
+- `get_track_info_from_database()` - Extract S/F coordinates from XML
+- `is_combo_track()` - Detect multi-layout combo tracks
+
+### racelogic_boundary.py
+
+Boundary processing for concatenated track data:
+- `detect_and_split_boundaries()` - Find where path returns to start
+- `remove_crossing_artifacts()` - Trim sharp turns (>50°) at split region
+- `close_boundary_loop()` - Connect end to start after trimming
+- `resample_boundary()` - Equal-distance point interpolation
+- `generate_centerline()` - Average two boundaries with direction alignment
+- `haversine_distance()` - Great-circle distance calculation
+
+### racelogic_kml.py
+
+KML/KMZ output generation:
+- `generate_kml()` - Full KML with boundaries, S/F markers
+- `create_kmz()` - Package KML into compressed KMZ
+- `find_closest_point()` - Locate nearest boundary point to coordinate
+- `generate_perpendicular_line_at_coord()` - S/F line across track
 
 ### Boundary Processing Pipeline
 
@@ -103,16 +139,6 @@ close_boundary_loop()          → Connect end to start
     ↓
 generate_kml()                 → Output with inner/outer boundaries + S/F markers
 ```
-
-### Key Functions
-
-| Function | Purpose |
-|----------|---------|
-| `parse_track_data_file()` | Parse .CIR files, handle hemisphere detection |
-| `convert_to_decimal_degrees()` | Convert RaceLogic minutes ÷ 60 |
-| `detect_and_split_boundaries()` | Find where path returns to start |
-| `remove_crossing_artifacts()` | Detect sharp turns (>50°), trim crossing points |
-| `haversine_distance()` | Great-circle distance between GPS points |
 
 ### Track Filtering
 

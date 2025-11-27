@@ -1,11 +1,16 @@
 """
+RaceLogic Track Converter
 
-This script converts RaceLogic track files to KML/KMZ format based on the
-specific RaceLogic folder structure. It processes all track configurations
-and creates corresponding KMZ files with accurate track paths.
+Imports RaceLogic track data from import/Racelogic/ folder:
+- Converts .CIR boundary files to KMZ format
+- Updates SQLite database with track metadata
+- Removes source files after successful import
+
+Input:  import/Racelogic/  (RaceLogic folder structure)
+Output: tracks/racelogic/{country}/{track}.kmz + tracks/racelogic.db
 
 Usage:
-    python racelogic_converter.py C:\\ProgramData\\Racelogic output_directory
+    python racelogic_converter.py
 """
 
 # List of .cir files to skip
@@ -1241,11 +1246,6 @@ def process_track(track_params):
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         log_message(f"Output path: {output_path}")
 
-        # If the output file already exists, skip
-        if os.path.exists(output_path):
-            log_message(f"Skipping {track_name} (already exists)")
-            return True
-
         # Get track info from database
         track_info = get_track_info_from_database(track_name, xml_db)
 
@@ -1495,30 +1495,61 @@ def process_all_tracks(input_dir, output_dir, num_processes=None):
 
 if __name__ == "__main__":
     log_message("Script main block started")
-    
-    if len(sys.argv) != 3:
-        log_message("Error: Invalid command line arguments")
-        print(
-            "Usage: python racelogic_batch_converter.py input_root_dir output_root_dir"
-        )
-        sys.exit(1)
 
-    input_root_dir = sys.argv[1]
-    output_root_dir = sys.argv[2]
+    # Fixed paths - always import from import/Racelogic/ to tracks/racelogic/
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    input_root_dir = os.path.join(script_dir, "import", "Racelogic")
+    output_root_dir = os.path.join(script_dir, "tracks", "racelogic")
+    db_path = os.path.join(script_dir, "tracks", "racelogic.db")
 
-    log_message(f"Input directory: {input_root_dir}")
-    log_message(f"Output directory: {output_root_dir}")
+    print("RaceLogic Track Converter")
+    print(f"  Input:  {input_root_dir}")
+    print(f"  Output: {output_root_dir}")
 
     if not os.path.exists(input_root_dir):
-        log_message(f"Error: Input directory not found: {input_root_dir}")
-        print(f"Error: Input directory not found: {input_root_dir}")
-        sys.exit(1)
+        print(f"No import/Racelogic/ folder found.")
+        sys.exit(0)
+
+    # Check for CIR files
+    cir_dir = os.path.join(input_root_dir, "CIR Files")
+    if not os.path.exists(cir_dir):
+        print("No CIR Files/ subfolder in import/Racelogic/")
+        sys.exit(0)
+
+    # Count CIR files
+    cir_count = sum(1 for root, dirs, files in os.walk(cir_dir)
+                    for f in files if f.lower().endswith('.cir'))
+    if cir_count == 0:
+        print("No .CIR files to import.")
+        sys.exit(0)
+
+    print(f"  Found: {cir_count} CIR files")
 
     # Process all tracks
     try:
         log_message("Starting process_all_tracks")
-        process_all_tracks(input_root_dir, output_root_dir)
+        success, errors = process_all_tracks(input_root_dir, output_root_dir)
         log_message("process_all_tracks completed")
+
+        # Update database from XML
+        from tracks_db import TracksDB, import_racelogic_xml
+        xml_path = os.path.join(input_root_dir, "Start Finish Database", "StartFinishDataBase.xml")
+        if os.path.exists(xml_path):
+            print(f"\nUpdating database...")
+            os.makedirs(os.path.dirname(db_path), exist_ok=True)
+            with TracksDB(db_path) as db:
+                stats = import_racelogic_xml(db, xml_path, replace=True)
+                print(f"  Database: {stats['imported']} added, {stats['replaced']} replaced")
+
+        # Clean up import folder if all succeeded
+        if errors == 0 and success > 0:
+            print(f"\nCleaning up import/Racelogic/...")
+            import shutil
+            shutil.rmtree(input_root_dir)
+            print("  Removed import/Racelogic/")
+
+        print(f"\nDone: {success} converted, {errors} errors")
+
     except Exception as e:
         log_message(f"Unhandled exception in process_all_tracks: {e}")
         log_message(f"Traceback: {traceback.format_exc()}")
